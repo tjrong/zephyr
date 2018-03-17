@@ -25,20 +25,6 @@
 
 /* forward declaration */
 
-/* Some configurations require that the stack/registers be adjusted before
- * _thread_entry. See discussion in swap.S for _x86_thread_entry_wrapper()
- */
-#if defined(CONFIG_GDB_INFO) || defined(CONFIG_DEBUG_INFO) || \
-	defined(CONFIG_X86_IAMCU)
-#define WRAPPER_REQUIRED
-#endif
-
-#ifdef WRAPPER_REQUIRED
-extern void _x86_thread_entry_wrapper(k_thread_entry_t entry,
-				      void *p1, void *p2, void *p3);
-#endif /* WRAPPER_REQUIRED */
-
-
 /* Initial thread stack frame, such that everything is laid out as expected
  * for when _Swap() switches to it for the first time.
  */
@@ -114,16 +100,16 @@ void _new_thread(struct k_thread *thread, k_thread_stack_t *stack,
 	initial_frame->eflags = (EflagsGet() & ~EFLAGS_MASK) | EFLAGS_INITIAL;
 #ifdef CONFIG_X86_USERSPACE
 	if (options & K_USER) {
-#ifdef WRAPPER_REQUIRED
+#ifdef _THREAD_WRAPPER_REQUIRED
 		initial_frame->edi = (u32_t)_arch_user_mode_enter;
 		initial_frame->_thread_entry = _x86_thread_entry_wrapper;
 #else
 		initial_frame->_thread_entry = _arch_user_mode_enter;
-#endif /* WRAPPER_REQUIRED */
+#endif /* _THREAD_WRAPPER_REQUIRED */
 	} else
 #endif /* CONFIG_X86_USERSPACE */
 	{
-#ifdef WRAPPER_REQUIRED
+#ifdef _THREAD_WRAPPER_REQUIRED
 		initial_frame->edi = (u32_t)_thread_entry;
 		initial_frame->_thread_entry = _x86_thread_entry_wrapper;
 #else
@@ -135,9 +121,9 @@ void _new_thread(struct k_thread *thread, k_thread_stack_t *stack,
 	 */
 	thread->callee_saved.esp = (unsigned long)initial_frame;
 
-#if (defined(CONFIG_FP_SHARING) || defined(CONFIG_GDB_INFO))
+#if defined(CONFIG_FP_SHARING)
 	thread->arch.excNestCount = 0;
-#endif /* CONFIG_FP_SHARING || CONFIG_GDB_INFO */
+#endif /* CONFIG_FP_SHARING */
 #ifdef CONFIG_THREAD_MONITOR
 	thread->entry = (struct __thread_entry *)&initial_frame->entry;
 	thread_monitor_init(thread);

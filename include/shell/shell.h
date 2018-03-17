@@ -44,6 +44,19 @@ struct shell_module {
 	shell_prompt_function_t prompt;
 };
 
+/** @typedef shell_mcumgr_function_t
+ * @brief Callback that is executed when an mcumgr packet is received over the
+ *        shell.
+ *
+ * The packet argument must be exactly what was received over the console,
+ * except the terminating newline must be replaced with '\0'.
+ *
+ * @param line The received mcumgr packet.
+ * @param arg An optional argument.
+ *
+ * @return  on success; negative error code on failure.
+ */
+typedef int (*shell_mcumgr_function_t)(const char *line, void *arg);
 
 /**
  * @brief Kernel Shell API
@@ -87,11 +100,11 @@ struct shell_module {
  * @brief Create a standalone command and set it up for boot time
  * initialization.
  *
- * @details This macro define a shell_cmd object hat is automatically
+ * @details This macro defines a shell_cmd object that is automatically
  * configured by the kernel during system initialization.
  *
- * The command will be available in he default module, so it will be available
- * immediatly when.
+ * The command will be available in the default module, so it will be available
+ * immediately.
  *
  */
 #ifdef CONFIG_CONSOLE_SHELL
@@ -147,6 +160,13 @@ void shell_register_prompt_handler(shell_prompt_function_t handler);
  *  @param name Module name.
  */
 void shell_register_default_module(const char *name);
+
+/** @brief Configures a callback for received mcumgr packets.
+ *
+ *  @param handler The callback to execute when an mcumgr packet is received.
+ *  @param arg An optional argument to pass to the callback.
+ */
+void shell_register_mcumgr_handler(shell_mcumgr_function_t handler, void *arg);
 
 /** @brief Execute command line.
  *

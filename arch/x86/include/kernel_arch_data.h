@@ -34,9 +34,16 @@
 
 #ifndef _ASMLANGUAGE
 #include <kernel.h>
-#include <nano_internal.h>
+#include <kernel_internal.h>
 #include <zephyr/types.h>
 #include <misc/dlist.h>
+#endif
+
+/* Some configurations require that the stack/registers be adjusted before
+ * _thread_entry. See discussion in swap.S for _x86_thread_entry_wrapper()
+ */
+#if defined(CONFIG_X86_IAMCU) || defined(CONFIG_DEBUG_INFO)
+#define _THREAD_WRAPPER_REQUIRED
 #endif
 
 
@@ -388,6 +395,11 @@
 
 #include <misc/util.h>
 
+#ifdef _THREAD_WRAPPER_REQUIRED
+extern void _x86_thread_entry_wrapper(k_thread_entry_t entry,
+				      void *p1, void *p2, void *p3);
+#endif /* _THREAD_WRAPPER_REQUIRED */
+
 #ifdef DEBUG
 #include <misc/printk.h>
 #define PRINTK(...) printk(__VA_ARGS__)
@@ -401,9 +413,6 @@ extern "C" {
 
 
 struct _kernel_arch {
-#if defined(CONFIG_DEBUG_INFO)
-	NANO_ISF *isf;    /* ptr to interrupt stack frame */
-#endif
 };
 
 typedef struct _kernel_arch _kernel_arch_t;

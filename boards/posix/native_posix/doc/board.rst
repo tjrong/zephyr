@@ -92,14 +92,16 @@ Therefore these limitations apply:
 
      /* We expect the peripheral done and ready to do something else */
 
+
 - This port is not meant to, and could not possibly help debug races between
   HW and SW, or similar timing related issues.
 
 - You may not use hard coded memory addresses because there is no I/O or
   MMU emulation.
 
+
 Working around these limitations
-==================================
+================================
 
 If a busy wait loop exists, it will become evident as the application will be
 stalled in it. To find the loop, you can run the binary in a debugger and
@@ -154,6 +156,11 @@ Run the zephyr.exe executable as you would any other Linux console application.
    $ zephyr/zephyr.exe
    # Press Ctrl+C to exit
 
+This executable accepts several command line options depending on the
+compilation configuration.
+You can run it with the ``--help`` command line switch to get a list of
+available options.
+
 Note that the Zephyr kernel does not actually exit once the application is
 finished. It simply goes into the idle loop forever.
 Therefore you must stop the application manually (Ctrl+C in Linux).
@@ -162,13 +169,13 @@ Application tests using the ``ztest`` framework will exit after all
 tests have completed.
 
 If you want your application to gracefully finish when it reaches some point,
-you may add a conditionally compiled (CONFIG_BOARD_NATIVE_POSIX) call to
-``main_clean_up(exit_code)`` at that point.
+you may add a conditionally compiled (:option:`CONFIG_ARCH_POSIX`) call to
+``posix_exit(int status)`` at that point.
 
 Debugging
 =========
 
-Since the Zephyr executable is a native application, it can be debuged and
+Since the Zephyr executable is a native application, it can be debugged and
 instrumented as any other native program. The program is compiled with debug
 information, so it can be run directly in, for example, ``gdb`` or instrumented
 with ``valgrind``.
@@ -335,7 +342,7 @@ depending on interrupt priorities, masking, and locking state.
 
 Normally the resulting executable runs fully decoupled from the real host time.
 That is, simulated time will advance as fast as it can. This is desirable when
-running in a debuger or testing in batch, but not if one wants to interact
+running in a debugger or testing in batch, but not if one wants to interact
 with external interfaces which are based on the real host time.
 
 Peripherals
@@ -343,16 +350,23 @@ Peripherals
 
 The following peripherals are currently provided with this board:
 
-**Console/printk driver**:
-  A driver is provided that redirects any printk write to the native
-  host application's stdout.
+**Console driver**:
+  A console driver is provided which by default is configured to:
+
+  - Redirect any :c:func:`printk` write to the native host application's
+    `stdout`.
+
+  - Feed any input from the native application `stdin` to a possible
+    running :ref:`Shell`. For more information refer to the section
+    `Shell support`_.
 
 **Simple timer**:
   A simple timer provides the kernel with a 10ms tick.
   This peripheral driver also provides the needed functionality for this
   architecture-specific :c:func:`k_busy_wait`.
 
-  This timer, is configured by default with NATIVE_POSIX_SLOWDOWN_TO_REAL_TIME_
+  This timer, is configured by default with
+  :option:`CONFIG_NATIVE_POSIX_SLOWDOWN_TO_REAL_TIME`
   to slow down the execution to real host time.
   This will provide the illusion that the simulated time is running at the same
   speed as the real host time.
@@ -362,11 +376,74 @@ The following peripherals are currently provided with this board:
   Normally the Zephyr application and HW models run in very little time
   on the host CPU, so this is a good enough approach.
 
-.. _NATIVE_POSIX_SLOWDOWN_TO_REAL_TIME:
-   ../../../../reference/kconfig/CONFIG_NATIVE_POSIX_SLOWDOWN_TO_REAL_TIME.html
+**Entropy device**:
+  An entropy device based on the host :c:func:`random` API.
+  This device will generate the same sequence of random number if initialized
+  with the same random seed.
+  You can change this random seed value by using the command line option:
+  ``--seed=<random_seed>`` where the value specified is a 32-bit integer
+  such as 97229 (decimal),  0x17BCD (hex), or 0275715 (octal).
 
 **Interrupt controller**:
   A simple yet generic interrupt controller is provided. It can nest interrupts
   and provides interrupt priorities. Interrupts can be individually masked or
   unmasked. SW interrupts are also supported.
 
+Shell support
+*************
+
+When the :ref:`Shell` subsystem is compiled with your application, the native
+standard input (`stdin`) will be redirected to the shell.
+You may use the shell interactively through the console,
+by piping another process output to it, or by feeding it a file.
+
+When using it interactively you may want to select the option
+:option:`CONFIG_NATIVE_POSIX_SLOWDOWN_TO_REAL_TIME`.
+
+When feeding `stdin` from a pipe or file, the console driver will ensure
+reproducibility between runs of the process:
+
+- The execution of the process will be stalled while waiting for new `stdin`
+  data to be ready.
+
+- Commands will be fed to the shell as fast as the shell can process them.
+  To allow controlling the flow of commands to the shell, you may use the
+  driver directive ``!wait <ms>``.
+
+- When the file ends, or the pipe is closed the driver will stop attempting to
+  read it.
+
+Driver directives
+=================
+
+The console driver understands a set of special commands: driver directives.
+These directives are captured by the console driver itself and are not
+forwarded to the shell.
+These directives are:
+
+- ``!wait <ms>``: When received, the driver will pause feeding commands to the
+  shell for `<ms>` milliseconds.
+
+- ``!quit``: When received the driver will cause the application to gracefully
+  exit by calling :c:func:`posix_exit`.
+
+
+Use example
+===========
+
+For example, you can build the shell sample app:
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/subsys/shell/shell_module
+   :host-os: unix
+   :board: native_posix
+   :goals: build
+   :compact:
+
+And feed it the following set of commands through a pipe:
+
+.. code-block:: console
+
+   echo -e \
+   'select kernel\nuptime\n!wait 500\nuptime\n!wait 1000\nuptime\n!quit' \
+   | zephyr/zephyr.exe

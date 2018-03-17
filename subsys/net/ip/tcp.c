@@ -337,9 +337,10 @@ static int finalize_segment(struct net_context *context, struct net_pkt *pkt)
 	return 0;
 }
 
-static struct net_pkt *prepare_segment(struct net_tcp *tcp,
-				       struct tcp_segment *segment,
-				       struct net_pkt *pkt)
+static int prepare_segment(struct net_tcp *tcp,
+			   struct tcp_segment *segment,
+			   struct net_pkt *pkt,
+			   struct net_pkt **out_pkt)
 {
 	struct net_buf *header, *tail = NULL;
 	struct net_context *context = tcp->context;
@@ -347,6 +348,7 @@ static struct net_pkt *prepare_segment(struct net_tcp *tcp,
 	u16_t dst_port, src_port;
 	bool pkt_allocated;
 	u8_t optlen = 0;
+	int status;
 
 	NET_ASSERT(context);
 
@@ -362,7 +364,7 @@ static struct net_pkt *prepare_segment(struct net_tcp *tcp,
 	} else {
 		pkt = net_pkt_get_tx(context, ALLOC_TIMEOUT);
 		if (!pkt) {
-			return NULL;
+			return -ENOMEM;
 		}
 
 		pkt_allocated = true;
@@ -400,18 +402,19 @@ static struct net_pkt *prepare_segment(struct net_tcp *tcp,
 			pkt->frags = tail;
 		}
 
-		return NULL;
+		return -EINVAL;
 	}
 
 	header = net_pkt_get_data(context, ALLOC_TIMEOUT);
 	if (!header) {
+		NET_WARN("[%p] Unable to alloc TCP header", tcp);
 		if (pkt_allocated) {
 			net_pkt_unref(pkt);
 		} else {
 			pkt->frags = tail;
 		}
 
-		return NULL;
+		return -ENOMEM;
 	}
 
 	net_pkt_frag_add(pkt, header);
@@ -438,17 +441,20 @@ static struct net_pkt *prepare_segment(struct net_tcp *tcp,
 		net_pkt_frag_add(pkt, tail);
 	}
 
-	if (finalize_segment(context, pkt) < 0) {
+	status = finalize_segment(context, pkt);
+	if (status < 0) {
 		if (pkt_allocated) {
 			net_pkt_unref(pkt);
 		}
 
-		return NULL;
+		return status;
 	}
 
 	net_tcp_trace(pkt, tcp);
 
-	return pkt;
+	*out_pkt = pkt;
+
+	return 0;
 }
 
 u32_t net_tcp_get_recv_wnd(const struct net_tcp *tcp)
@@ -465,6 +471,7 @@ int net_tcp_prepare_segment(struct net_tcp *tcp, u8_t flags,
 	u32_t seq;
 	u16_t wnd;
 	struct tcp_segment segment = { 0 };
+	int status;
 
 	if (!local) {
 		local = &tcp->context->local;
@@ -520,9 +527,9 @@ int net_tcp_prepare_segment(struct net_tcp *tcp, u8_t flags,
 	segment.options = options;
 	segment.optlen = optlen;
 
-	*send_pkt = prepare_segment(tcp, &segment, *send_pkt);
-	if (!*send_pkt) {
-		return -EINVAL;
+	status = prepare_segment(tcp, &segment, *send_pkt, send_pkt);
+	if (status < 0) {
+		return status;
 	}
 
 	tcp->send_seq = seq;
@@ -654,11 +661,37 @@ int net_tcp_prepare_ack(struct net_tcp *tcp, const struct sockaddr *remote,
 	return -EINVAL;
 }
 
+static inline void copy_sockaddr_to_sockaddr_ptr(struct net_tcp *tcp,
+						 const struct sockaddr *local,
+						 struct sockaddr_ptr *addr)
+{
+	memset(addr, 0, sizeof(struct sockaddr_ptr));
+
+#if defined(CONFIG_NET_IPV4)
+	if (local->sa_family == AF_INET) {
+		net_sin_ptr(addr)->sin_family = AF_INET;
+		net_sin_ptr(addr)->sin_port = net_sin(local)->sin_port;
+		net_sin_ptr(addr)->sin_addr = &net_sin(local)->sin_addr;
+	}
+#endif
+
+#if defined(CONFIG_NET_IPV6)
+	if (local->sa_family == AF_INET6) {
+		net_sin6_ptr(addr)->sin6_family = AF_INET6;
+		net_sin6_ptr(addr)->sin6_port = net_sin6(local)->sin6_port;
+		net_sin6_ptr(addr)->sin6_addr = &net_sin6(local)->sin6_addr;
+	}
+#endif
+}
+
 int net_tcp_prepare_reset(struct net_tcp *tcp,
+			  const struct sockaddr *local,
 			  const struct sockaddr *remote,
 			  struct net_pkt **pkt)
 {
 	struct tcp_segment segment = { 0 };
+	int status = 0;
+	struct sockaddr_ptr src_addr_ptr;
 
 	if ((net_context_get_state(tcp->context) != NET_CONTEXT_UNCONNECTED) &&
 	    (net_tcp_get_state(tcp) != NET_TCP_SYN_SENT) &&
@@ -667,16 +700,24 @@ int net_tcp_prepare_reset(struct net_tcp *tcp,
 		segment.ack = tcp->send_ack;
 		segment.flags = NET_TCP_RST | NET_TCP_ACK;
 		segment.seq = tcp->send_seq;
-		segment.src_addr = &tcp->context->local;
+
+		if (!local) {
+			segment.src_addr = &tcp->context->local;
+		} else {
+			copy_sockaddr_to_sockaddr_ptr(tcp, local,
+						      &src_addr_ptr);
+			segment.src_addr = &src_addr_ptr;
+		}
+
 		segment.dst_addr = remote;
 		segment.wnd = 0;
 		segment.options = NULL;
 		segment.optlen = 0;
 
-		*pkt = prepare_segment(tcp, &segment, NULL);
+		status = prepare_segment(tcp, &segment, NULL, pkt);
 	}
 
-	return 0;
+	return status;
 }
 
 const char *net_tcp_state_str(enum net_tcp_state state)
@@ -953,32 +994,14 @@ bool net_tcp_ack_received(struct net_context *ctx, u32_t ack)
 		valid_ack = true;
 	}
 
-	/* No need to re-send stuff we are closing down */
+	/* Restart the timer on a valid inbound ACK.  This isn't quite the
+	 * same behavior as per-packet retry timers, but is close in practice
+	 * (it starts retries one timer period after the connection
+	 * "got stuck") and avoids the need to track per-packet timers or
+	 * sent times.
+	 */
 	if (valid_ack && net_tcp_get_state(tcp) == NET_TCP_ESTABLISHED) {
-		/* Restart the timer on a valid inbound ACK.  This
-		 * isn't quite the same behavior as per-packet retry
-		 * timers, but is close in practice (it starts retries
-		 * one timer period after the connection "got stuck")
-		 * and avoids the need to track per-packet timers or
-		 * sent times.
-		 */
 		restart_timer(ctx->tcp);
-
-		/* And, if we had been retrying, mark all packets
-		 * untransmitted and then resend them.  The stalled
-		 * pipe is uncorked again.
-		 */
-		if (ctx->tcp->flags & NET_TCP_RETRYING) {
-			SYS_SLIST_FOR_EACH_CONTAINER(&ctx->tcp->sent_list, pkt,
-						     sent_list) {
-				if (net_pkt_sent(pkt)) {
-					do_ref_if_needed(ctx->tcp, pkt);
-					net_pkt_set_sent(pkt, false);
-				}
-			}
-
-			net_tcp_send_data(ctx);
-		}
 	}
 
 	return true;

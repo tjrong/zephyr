@@ -8,7 +8,7 @@
 #include <st/stm32f429.dtsi>
 
 / {
-	model = "STMicroelectronics STM32F429ZI -NUCLEO board";
+	model = "STMicroelectronics STM32F429ZI-NUCLEO board";
 	compatible = "st,stm32f429zi-nucleo", "st,stm32f429";
 
 	chosen {
@@ -16,6 +16,11 @@
 		zephyr,sram = &sram0;
 		zephyr,flash = &flash0;
 	};
+};
+
+&i2c1 {
+	status = "ok";
+	clock-frequency = <I2C_BITRATE_FAST>;
 };
 
 &usart3 {

@@ -9,7 +9,7 @@
 #define SW_SWITCH_TIMER NRF_TIMER1
 #define SW_SWITCH_TIMER_EVTS_COMP_BASE 0
 #define SW_SWITCH_TIMER_TASK_GROUP_BASE 0
-#endif
+#endif /* !CONFIG_BT_CTLR_TIFS_HW */
 
 /* TXEN->TXIDLE + TXIDLE->TX in microseconds. */
 #define HAL_RADIO_NRF51_TXEN_TXIDLE_TX_US 140
@@ -22,6 +22,10 @@
 #define HAL_RADIO_NRF51_TX_CHAIN_DELAY_NS 1000 /* 1.0 */
 #define HAL_RADIO_NRF51_RX_CHAIN_DELAY_US 3 /* ceil(3.0) */
 #define HAL_RADIO_NRF51_RX_CHAIN_DELAY_NS 3000 /* 3.0 */
+
+static inline void hal_radio_reset(void)
+{
+}
 
 static inline void hal_radio_ram_prio_setup(void)
 {

@@ -63,15 +63,6 @@ config IOAPIC_DEBUG
 	help
 	  Enable debugging for IO-APIC driver.
 
-if !HAS_DTS
-config IOAPIC_BASE_ADDRESS
-	hex "IO-APIC Base Address"
-	default 0xFEC00000
-	depends on IOAPIC
-	help
-	  This option specifies the base address of the IO-APIC device.
-endif
-
 config IOAPIC_NUM_RTES
 	int "Number of Redirection Table Entries available"
 	default 24
@@ -136,5 +127,7 @@ config PLIC_FE310
 	  for external interrupt lines defined by the FE310 SOC;
 
 source "drivers/interrupt_controller/Kconfig.stm32"
+
+source "drivers/interrupt_controller/Kconfig.multilevel"
 
 endmenu

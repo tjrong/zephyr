@@ -107,11 +107,15 @@ config CLOCK_STM32_PLL_PREDIV
 
 config CLOCK_STM32_PLL_PREDIV1
 	int "PREDIV1 Prescaler"
-	depends on CLOCK_STM32_PLL_SRC_HSE && (SOC_STM32F091XB || SOC_STM32F091XC)
+	depends on CLOCK_STM32_PLL_SRC_HSE
 	default 1
 	range 1 16
 	help
-	 PREDIV is PLLSCR clock signal prescaler, present on STM32F091xB, STM32F091xC.
+	 PREDIV is PLLSCR clock signal prescaler, present on STM32F0 SoC having
+	 an HSE Oscillator available like the stm32f04xx, stm32f07xx,
+	 stm32f09xx and stm32f030xc parts. If configured on a non supported
+	 part, the HSI oscillator will be used a default PLL source and this
+	 config will be ignored.
 	 Allowed values: 1 - 16.
 
 config CLOCK_STM32_PLL_MULTIPLIER
@@ -242,6 +246,27 @@ config CLOCK_STM32_PLL_Q_DIVISOR
 	 Allowed values: 2-15
 
 endif # SOC_SERIES_STM32F4X
+
+if SOC_SERIES_STM32L0X
+
+config CLOCK_STM32_PLL_MULTIPLIER
+	int "PLL multiplier"
+	depends on CLOCK_STM32_SYSCLK_SRC_PLL
+	default 4
+	range 3 48
+	help
+	 PLL multiplier, allowed values: 3, 4, 6, 8, 12, 16, 24, 32, 48.
+	 PLL output must not exceed 96MHz(1.8V)/48MHz(1.5V)/24MHz(1.2V).
+
+config CLOCK_STM32_PLL_DIVISOR
+	int "PLL divisor"
+	depends on CLOCK_STM32_SYSCLK_SRC_PLL
+	default 2
+	range 2 4
+	help
+	  PLL divisor, allowed values: 2-4.
+
+endif # SOC_SERIES_STM32L0X
 
 if SOC_SERIES_STM32L4X
 

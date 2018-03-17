@@ -22,7 +22,8 @@ extern "C" {
 #endif
 
 void posix_irq_handler(void);
-void main_clean_up(int exit_code);
+void posix_exit(int exit_code);
+u64_t posix_get_hw_cycle(void);
 
 #if defined(CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT)
 void k_busy_wait(u32_t usec_to_wait);

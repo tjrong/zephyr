@@ -53,12 +53,25 @@
 #define SYS_LOG_LEVEL CONFIG_SYS_LOG_USB_DRIVER_LEVEL
 #include <logging/sys_log.h>
 
+/* Total in ep number = bidirectional ep number + in ep number */
+#define NUM_IN_EP (CONFIG_USB_NUM_BIDIR_ENDPOINTS + \
+		   CONFIG_USB_NUM_IN_ENDPOINTS)
 
-/* We need one RX FIFO and n TX FIFOs */
-#define FIFO_NUM (1 + CONFIG_USB_DC_STM32_EP_NUM)
+/* Total out ep number = bidirectional ep number + out ep number */
+#define NUM_OUT_EP (CONFIG_USB_NUM_BIDIR_ENDPOINTS + \
+		    CONFIG_USB_NUM_OUT_ENDPOINTS)
+/*
+ * Total bidirectional ep number = bidirectional ep number + (out ep number +
+ * in ep number) / 2.  Because out ep number = in ep number,
+ * total bidirectional ep number = total out ep number or total in ep number
+ */
+#define NUM_BIDIR_EP NUM_OUT_EP
+
+/* We need one RX FIFO and n TX-IN FIFOs */
+#define FIFO_NUM (1 + NUM_IN_EP)
 
 /* 4-byte words FIFO */
-#define FIFO_WORDS (CONFIG_USB_DC_STM32_RAM_SIZE / 4)
+#define FIFO_WORDS (CONFIG_USB_RAM_SIZE / 4)
 
 /* Allocate FIFO memory evenly between the FIFOs */
 #define FIFO_EP_WORDS (FIFO_WORDS / FIFO_NUM)
@@ -90,9 +103,9 @@ struct usb_dc_stm32_ep_state {
 struct usb_dc_stm32_state {
 	PCD_HandleTypeDef pcd;	/* Storage for the HAL_PCD api */
 	usb_dc_status_callback status_cb; /* Status callback */
-	struct usb_dc_stm32_ep_state out_ep_state[CONFIG_USB_DC_STM32_EP_NUM];
-	struct usb_dc_stm32_ep_state in_ep_state[CONFIG_USB_DC_STM32_EP_NUM];
-	u8_t ep_buf[CONFIG_USB_DC_STM32_EP_NUM][USB_OTG_FS_MAX_PACKET_SIZE];
+	struct usb_dc_stm32_ep_state out_ep_state[NUM_OUT_EP];
+	struct usb_dc_stm32_ep_state in_ep_state[NUM_IN_EP];
+	u8_t ep_buf[NUM_OUT_EP][USB_OTG_FS_MAX_PACKET_SIZE];
 };
 
 static struct usb_dc_stm32_state usb_dc_stm32_state;
@@ -103,7 +116,7 @@ static struct usb_dc_stm32_ep_state *usb_dc_stm32_get_ep_state(u8_t ep)
 {
 	struct usb_dc_stm32_ep_state *ep_state_base;
 
-	if (EP_IDX(ep) >= CONFIG_USB_DC_STM32_EP_NUM) {
+	if (EP_IDX(ep) >= NUM_BIDIR_EP) {
 		return NULL;
 	}
 
@@ -141,7 +154,7 @@ static int usb_dc_stm32_init(void)
 
 	/* We only support OTG FS for now */
 	usb_dc_stm32_state.pcd.Instance = USB_OTG_FS;
-	usb_dc_stm32_state.pcd.Init.dev_endpoints = CONFIG_USB_DC_STM32_EP_NUM;
+	usb_dc_stm32_state.pcd.Init.dev_endpoints = NUM_BIDIR_EP;
 	usb_dc_stm32_state.pcd.Init.speed = USB_OTG_SPEED_FULL;
 	usb_dc_stm32_state.pcd.Init.phy_itface = PCD_PHY_EMBEDDED;
 	usb_dc_stm32_state.pcd.Init.ep0_mps = USB_OTG_MAX_EP0_SIZE;
@@ -169,15 +182,15 @@ static int usb_dc_stm32_init(void)
 
 	/* TODO: make this dynamic (depending usage) */
 	HAL_PCDEx_SetRxFiFo(&usb_dc_stm32_state.pcd, FIFO_EP_WORDS);
-	for (i = 0; i < CONFIG_USB_DC_STM32_EP_NUM; i++) {
+	for (i = 0; i < NUM_IN_EP; i++) {
 		HAL_PCDEx_SetTxFiFo(&usb_dc_stm32_state.pcd, i,
 				    FIFO_EP_WORDS);
 		k_sem_init(&usb_dc_stm32_state.in_ep_state[i].write_sem, 1, 1);
 	}
 
-	IRQ_CONNECT(STM32F4_IRQ_OTG_FS, CONFIG_USB_DC_STM32_IRQ_PRI,
+	IRQ_CONNECT(CONFIG_USB_IRQ, CONFIG_USB_IRQ_PRI,
 		    usb_dc_stm32_isr, 0, 0);
-	irq_enable(STM32F4_IRQ_OTG_FS);
+	irq_enable(CONFIG_USB_IRQ);
 
 	return 0;
 }
@@ -488,8 +501,8 @@ int usb_dc_ep_write(const u8_t ep, const u8_t *const data,
 	return ret;
 }
 
-int usb_dc_ep_read(const u8_t ep, u8_t *const data, const u32_t max_data_len,
-		   u32_t * const read_bytes)
+int usb_dc_ep_read_wait(u8_t ep, u8_t *data, u32_t max_data_len,
+			u32_t *read_bytes)
 {
 	struct usb_dc_stm32_ep_state *ep_state = usb_dc_stm32_get_ep_state(ep);
 	u32_t read_count = ep_state->read_count;
@@ -497,18 +510,39 @@ int usb_dc_ep_read(const u8_t ep, u8_t *const data, const u32_t max_data_len,
 	SYS_LOG_DBG("ep 0x%02x, %u bytes, %u+%u, %p", ep,
 		    max_data_len, ep_state->read_offset, read_count, data);
 
-	if (!max_data_len) {
-		goto done;
+	if (!EP_IS_OUT(ep)) { /* check if OUT ep */
+		SYS_LOG_ERR("Wrong endpoint direction: 0x%02x", ep);
+		return -EINVAL;
 	}
 
-	read_count = min(read_count, max_data_len);
-
-	/* Read data previously stored in the buffer */
-	if (read_count) {
+	/* When both buffer and max data to read are zero, just ingore reading
+	 * and return available data in buffer. Otherwise, return data
+	 * previously stored in the buffer.
+	 */
+	if (data) {
+		read_count = min(read_count, max_data_len);
 		memcpy(data, usb_dc_stm32_state.ep_buf[EP_IDX(ep)] +
 		       ep_state->read_offset, read_count);
 		ep_state->read_count -= read_count;
 		ep_state->read_offset += read_count;
+	} else if (max_data_len) {
+		SYS_LOG_ERR("Wrong arguments");
+	}
+
+	if (read_bytes) {
+		*read_bytes = read_count;
+	}
+
+	return 0;
+}
+
+int usb_dc_ep_read_continue(u8_t ep)
+{
+	struct usb_dc_stm32_ep_state *ep_state = usb_dc_stm32_get_ep_state(ep);
+
+	if (!EP_IS_OUT(ep)) { /* Check if OUT ep */
+		SYS_LOG_ERR("Not valid endpoint: %02x", ep);
+		return -EINVAL;
 	}
 
 	/* If no more data in the buffer, start a new read transaction.
@@ -519,12 +553,29 @@ int usb_dc_ep_read(const u8_t ep, u8_t *const data, const u32_t max_data_len,
 				     USB_OTG_FS_MAX_PACKET_SIZE);
 	}
 
-done:
-	if (read_bytes) {
-		*read_bytes = read_count;
+	return 0;
+}
+
+int usb_dc_ep_read(const u8_t ep, u8_t *const data, const u32_t max_data_len,
+		   u32_t * const read_bytes)
+{
+	if (usb_dc_ep_read_wait(ep, data, max_data_len, read_bytes) != 0) {
+		return -EINVAL;
+	}
+
+	if (usb_dc_ep_read_continue(ep) != 0) {
+		return -EINVAL;
 	}
 
 	return 0;
+}
+
+
+int usb_dc_ep_mps(const u8_t ep)
+{
+	struct usb_dc_stm32_ep_state *ep_state = usb_dc_stm32_get_ep_state(ep);
+
+	return ep_state->ep_mps;
 }
 
 /* Callbacks from the STM32 Cube HAL code */

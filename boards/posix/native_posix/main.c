@@ -25,24 +25,20 @@
 #include "misc/util.h"
 #include "cmdline.h"
 
-#define STOP_AFTER_5_SECONDS 0
-
-
-void main_clean_up(int exit_code)
+void posix_exit(int exit_code)
 {
 	static int max_exit_code;
 
 	max_exit_code = max(exit_code, max_exit_code);
 	/*
 	 * posix_soc_clean_up may not return if this is called from a SW thread,
-	 * but instead it would get main_clean_up() recalled again
+	 * but instead it would get posix_exit() recalled again
 	 * ASAP from the HW thread
 	 */
 	posix_soc_clean_up();
 	hwm_cleanup();
 	exit(exit_code);
 }
-
 
 /**
  * This is the actual main for the Linux process,
@@ -61,10 +57,6 @@ int main(int argc, char *argv[])
 	native_handle_cmd_line(argc, argv);
 
 	hwm_init();
-
-#if (STOP_AFTER_5_SECONDS)
-	hwm_set_end_of_time(5e6);
-#endif
 
 	posix_boot_cpu();
 

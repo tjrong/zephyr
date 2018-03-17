@@ -1,4 +1,4 @@
-# Kconfig - NUCLEO-144 F429ZI  board configuration
+# Kconfig - NUCLEO-144 F429ZI board configuration
 #
 # Copyright (c) 2017 Linaro Limited
 #
@@ -26,5 +26,12 @@ config ETH_STM32_HAL
 	def_bool y
 
 endif # NETWORKING
+
+if I2C
+
+config I2C_1
+	def_bool y
+
+endif # I2C
 
 endif # BOARD_NUCLEO_F429ZI

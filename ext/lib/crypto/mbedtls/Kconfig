@@ -24,33 +24,62 @@ menuconfig MBEDTLS
 	help
 	  This option enables the mbedTLS cryptography library.
 
+if MBEDTLS
+
+choice
+	prompt "Select implementation"
+	default MBEDTLS_BUILTIN
+
 config MBEDTLS_BUILTIN
 	bool "Enable mbedTLS integrated sources"
-	depends on MBEDTLS
-	default n
 	help
 	  Link with local mbedTLS sources instead of external library.
+
+config MBEDTLS_LIBRARY
+	bool "Enable mbedTLS external library"
+	help
+	  This option enables mbedTLS library.
+
+endchoice
 
 config MBEDTLS_CFG_FILE
 	string "mbed TLS configuration file"
 	depends on MBEDTLS_BUILTIN
-	default "config-threadnet.h"
+	default "config-mini-tls1_2.h"
 	help
-	  Enable custom mbed TLS configuration
+	  Use a specific mbed TLS configuration file. The default is suitable to
+	  communicate with majority of HTTPS servers on the Internet, but has
+	  relatively many features enabled. To optimize resources for special
+	  TLS usage, an alternative config may be selected.
 
 config MBEDTLS_DEBUG
 	bool "mbed TLS debug activation"
 	depends on MBEDTLS_BUILTIN
 	default n
 	help
-	  Enable debugging activation for mbed TLS configuration. Note that this
-	  does not directly cause any debug print output. For that you need to
-	  call
-	  mbedtls_debug_set_threshold(level);
-	  and
+	  Enable debugging activation for mbed TLS configuration. If you use
+	  mbedTLS/Zephyr integration (e.g. net_app), this will activate debug
+	  logging (of the level configured by MBEDTLS_DEBUG_LEVEL).
+	  If you use mbedTLS directly instead, you will need to perform
+	  additional configuration yourself: call
 	  mbedtls_ssl_conf_dbg(&mbedtls.conf, my_debug, NULL);
+	  mbedtls_debug_set_threshold(level);
 	  functions in your application, and create the my_debug() function to
 	  actually print something useful.
+
+config MBEDTLS_DEBUG_LEVEL
+	int "mbed TLS default debug level"
+	depends on MBEDTLS_DEBUG
+	default 0
+	range 0 4
+	help
+	  Default mbed TLS debug logging level for Zephyr integration code
+	  (from ext/lib/crypto/mbedtls/include/mbedtls/debug.h):
+	  0 No debug
+	  1 Error
+	  2 State change
+	  3 Information
+	  4 Verbose
 
 config MBEDTLS_TEST
 	bool "Compile internal self test functions"
@@ -58,13 +87,6 @@ config MBEDTLS_TEST
 	default n
 	help
 	  Enable self test function for the crypto algorithms
-
-config MBEDTLS_LIBRARY
-	bool "Enable mbedTLS external library"
-	depends on MBEDTLS
-	default n
-	help
-	  This option enables mbedTLS library.
 
 config MBEDTLS_INSTALL_PATH
 	string "mbedTLS install path"
@@ -77,7 +99,6 @@ config MBEDTLS_INSTALL_PATH
 config MBEDTLS_ENABLE_HEAP
 	bool "Enable global heap for mbed TLS"
 	default n
-	depends on MBEDTLS
 	help
 	  This option enables the mbedtls to use the heap. This setting must
 	  be global so that various applications and libraries in Zephyr do not
@@ -107,3 +128,5 @@ config APP_LINK_WITH_MBEDTLS
 	  Add MBEDTLS header files to the 'app' include path. It may be
 	  disabled if the include paths for MBEDTLS are causing aliasing
 	  issues for 'app'.
+
+endif

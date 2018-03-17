@@ -104,6 +104,16 @@ config ASSERT_LEVEL
 	  Level 1: on + warning in every file that includes __assert.h
 	  Level 2: on + no warning
 
+config FORCE_NO_ASSERT
+	bool
+	prompt "Force-disable no assertions"
+	default n
+	help
+	  This boolean option disables Zephyr assertion testing even
+	  in circumstances (sanitycheck) where it is enabled via
+	  CFLAGS and not Kconfig.  Added solely to be able to work
+	  around compiler bugs for specific tests.
+
 config OBJECT_TRACING
 	bool
 	prompt "Kernel object tracing"
@@ -153,25 +163,25 @@ config OMIT_FRAME_POINTER
 config DEBUG_INFO
 	bool "Enable system debugging information"
 	default n
-	depends on X86
 	help
-	  This option enables the addition of various information that can be used
-	  by debuggers in debugging the system.
+	  This option enables the addition of various information that can be
+	  used by debuggers in debugging the system, or enable additional
+	  debugging information to be reported at runtime.
 
-	  NOTE: Does not currently work with the x86 IAMCU ABI.
+config EXCEPTION_STACK_TRACE
+	bool "Attempt to print stack traces upon exceptions"
+	default y
+	depends on PRINTK
+	depends on DEBUG_INFO
+	depends on !OMIT_FRAME_POINTER
+	help
+	  If the architecture fatal handling code supports it, attempt to
+	  print a stack trace of function memory addresses when an
+	  exception is reported.
 
 #
 # Miscellaneous debugging options
 #
-
-config GDB_INFO
-	bool
-	prompt "Thread-aware debugging with GDB"
-	default n
-	help
-	  This option enables the kernel to collect additional information
-	  during interrupts, exceptions, and context switches. This information
-	  is required for thread-aware debugging with GDB.
 
 config OPENOCD_SUPPORT
 	bool

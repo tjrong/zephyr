@@ -5,7 +5,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <soc.h>
+#if !defined(CONFIG_ARCH_POSIX)
 #include <arch/arm/cortex_m/cmsis.h>
+#endif
 
 #include "util/mem.h"
 #include "hal/ccm.h"
@@ -20,7 +22,6 @@
 #else
 #error "Platform not defined."
 #endif
-
 
 static radio_isr_fp sfp_radio_isr;
 
@@ -46,6 +47,9 @@ void radio_isr_set(radio_isr_fp fp_radio_isr)
 				 */
 	    );
 
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_INTENSET();
+#endif
 	NVIC_ClearPendingIRQ(RADIO_IRQn);
 	irq_enable(RADIO_IRQn);
 }
@@ -77,9 +81,17 @@ void radio_reset(void)
 	NRF_RADIO->POWER =
 	    ((RADIO_POWER_POWER_Disabled << RADIO_POWER_POWER_Pos) &
 	     RADIO_POWER_POWER_Msk);
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_POWER();
+#endif
 	NRF_RADIO->POWER =
 	    ((RADIO_POWER_POWER_Enabled << RADIO_POWER_POWER_Pos) &
 	     RADIO_POWER_POWER_Msk);
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_POWER();
+#endif
+
+	hal_radio_reset();
 }
 
 void radio_phy_set(u8_t phy, u8_t flags)
@@ -159,6 +171,7 @@ void radio_pkt_configure(u8_t bits_len, u8_t max_len, u8_t flags)
 			 RADIO_PCNF0_PLEN_Msk;
 		break;
 
+#if defined(CONFIG_BT_CTLR_PHY_CODED)
 #if defined(CONFIG_SOC_NRF52840)
 	case BIT(2):
 		extra |= (RADIO_PCNF0_PLEN_LongRange << RADIO_PCNF0_PLEN_Pos) &
@@ -168,6 +181,7 @@ void radio_pkt_configure(u8_t bits_len, u8_t max_len, u8_t flags)
 			 RADIO_PCNF0_TERMLEN_Msk;
 		break;
 #endif /* CONFIG_SOC_NRF52840 */
+#endif /* CONFIG_BT_CTLR_PHY_CODED */
 	}
 
 	/* To use same Data Channel PDU structure with nRF5 specific overhead
@@ -233,11 +247,17 @@ u32_t radio_rx_chain_delay_get(u8_t phy, u8_t flags)
 void radio_rx_enable(void)
 {
 	NRF_RADIO->TASKS_RXEN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_TASKS_RXEN();
+#endif
 }
 
 void radio_tx_enable(void)
 {
 	NRF_RADIO->TASKS_TXEN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_TASKS_TXEN();
+#endif
 }
 
 void radio_disable(void)
@@ -247,10 +267,17 @@ void radio_disable(void)
 			   HAL_SW_SWITCH_GROUP_TASK_ENABLE_PPI_DISABLE;
 	NRF_PPI->TASKS_CHG[SW_SWITCH_TIMER_TASK_GROUP(0)].DIS = 1;
 	NRF_PPI->TASKS_CHG[SW_SWITCH_TIMER_TASK_GROUP(1)].DIS = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+	NRF_PPI_tasw_sideeffects();
+#endif
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 
 	NRF_RADIO->SHORTS = 0;
 	NRF_RADIO->TASKS_DISABLE = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_TASKS_DISABLE();
+#endif
 }
 
 void radio_status_reset(void)
@@ -270,10 +297,29 @@ u32_t radio_is_ready(void)
 	return (NRF_RADIO->EVENTS_READY != 0);
 }
 
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+static u32_t last_pdu_end_us;
+
+u32_t radio_is_done(void)
+{
+	if (NRF_RADIO->EVENTS_END != 0) {
+		/* On packet END event increment last packet end time value.
+		 * Note: this depends on the function being called exactly once
+		 * in the ISR function.
+		 */
+		last_pdu_end_us += EVENT_TIMER->CC[2];
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+#else /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 u32_t radio_is_done(void)
 {
 	return (NRF_RADIO->EVENTS_END != 0);
 }
+#endif /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 
 u32_t radio_has_disabled(void)
 {
@@ -344,9 +390,9 @@ static void sw_switch(u8_t dir, u8_t phy_curr, u8_t flags_curr, u8_t phy_next,
 		    hal_radio_tx_ready_delay_ns_get(phy_next, flags_next) +
 		    hal_radio_rx_chain_delay_ns_get(phy_curr, 1));
 
-		HAL_SW_SWITCH_RADIO_ENABLE_PPI_REGISTER_TASK(ppi) =
-		    HAL_SW_SWITCH_RADIO_ENABLE_PPI_TASK_TX;
+		hal_radio_txen_on_sw_switch(ppi);
 
+#if defined(CONFIG_BT_CTLR_PHY_CODED)
 #if defined(CONFIG_SOC_NRF52840)
 		if (phy_curr & BIT(2)) {
 			/* Switching to TX after RX on LE Coded PHY. */
@@ -431,6 +477,7 @@ static void sw_switch(u8_t dir, u8_t phy_curr, u8_t flags_curr, u8_t phy_next,
 				    sw_tifs_toggle);
 		}
 #endif /* CONFIG_SOC_NRF52840 */
+#endif /* CONFIG_BT_CTLR_PHY_CODED */
 	} else {
 		/* RX */
 		delay = HAL_RADIO_NS2US_CEIL(
@@ -438,9 +485,9 @@ static void sw_switch(u8_t dir, u8_t phy_curr, u8_t flags_curr, u8_t phy_next,
 			hal_radio_tx_chain_delay_ns_get(phy_curr, flags_curr)) +
 			4; /* 4us as +/- active jitter */
 
-		HAL_SW_SWITCH_RADIO_ENABLE_PPI_REGISTER_TASK(ppi) =
-			HAL_SW_SWITCH_RADIO_ENABLE_PPI_TASK_RX;
+		hal_radio_rxen_on_sw_switch(ppi);
 
+#if defined(CONFIG_BT_CTLR_PHY_CODED)
 #if defined(CONFIG_SOC_NRF52840)
 		if (1) {
 			u8_t ppi_dis =
@@ -461,6 +508,7 @@ static void sw_switch(u8_t dir, u8_t phy_curr, u8_t flags_curr, u8_t phy_next,
 				~(HAL_SW_SWITCH_RADIO_ENABLE_S2_PPI_INCLUDE);
 		}
 #endif /* CONFIG_SOC_NRF52840 */
+#endif /* CONFIG_BT_CTLR_PHY_CODED */
 	}
 
 	if (delay <
@@ -473,6 +521,17 @@ static void sw_switch(u8_t dir, u8_t phy_curr, u8_t flags_curr, u8_t phy_next,
 	NRF_PPI->CHENSET =
 		HAL_SW_SWITCH_TIMER_CLEAR_PPI_ENABLE |
 		HAL_SW_SWITCH_GROUP_TASK_ENABLE_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_CC(SW_SWITCH_TIMER_NBR, sw_tifs_toggle);
+	NRF_PPI_regw_sideeffects();
+#endif
+
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+	/* Since the event timer is cleared on END, we
+	 * always need to capture the PDU END time-stamp.
+	 */
+	radio_tmr_end_capture();
+#endif /* CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 
 	sw_tifs_toggle += 1;
 	sw_tifs_toggle &= 1;
@@ -514,6 +573,9 @@ void radio_switch_complete_and_disable(void)
 #if !defined(CONFIG_BT_CTLR_TIFS_HW)
 	NRF_PPI->CHENCLR = HAL_SW_SWITCH_TIMER_CLEAR_PPI_DISABLE |
 			   HAL_SW_SWITCH_GROUP_TASK_ENABLE_PPI_DISABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 }
 
@@ -580,6 +642,9 @@ void radio_bc_configure(u32_t n)
 {
 	NRF_RADIO->BCC = n;
 	NRF_RADIO->SHORTS |= RADIO_SHORTS_ADDRESS_BCSTART_Msk;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RADIO_regw_sideeffects_BCC();
+#endif
 }
 
 void radio_bc_status_reset(void)
@@ -595,6 +660,9 @@ u32_t radio_bc_has_match(void)
 void radio_tmr_status_reset(void)
 {
 	NRF_RTC0->EVTENCLR = RTC_EVTENCLR_COMPARE2_Msk;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RTC0_regw_sideeffects();
+#endif
 
 	NRF_PPI->CHENCLR =
 			HAL_RADIO_ENABLE_ON_TICK_PPI_DISABLE |
@@ -603,13 +671,19 @@ void radio_tmr_status_reset(void)
 			HAL_RADIO_RECV_TIMEOUT_CANCEL_PPI_DISABLE |
 			HAL_RADIO_DISABLE_ON_HCTO_PPI_DISABLE |
 			HAL_RADIO_END_TIME_CAPTURE_PPI_DISABLE |
+#if defined(CONFIG_BT_CTLR_PHY_CODED)
 #if defined(CONFIG_SOC_NRF52840)
 			HAL_TRIGGER_RATEOVERRIDE_PPI_DISABLE |
 #if !defined(CONFIG_BT_CTLR_TIFS_HW)
 			HAL_SW_SWITCH_TIMER_S8_DISABLE_PPI_DISABLE |
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 #endif /* CONFIG_SOC_NRF52840 */
+#endif /* CONFIG_BT_CTLR_PHY_CODED */
 			HAL_TRIGGER_CRYPT_PPI_DISABLE;
+
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 }
 
 void radio_tmr_tifs_set(u32_t tifs)
@@ -618,6 +692,9 @@ void radio_tmr_tifs_set(u32_t tifs)
 	NRF_RADIO->TIFS = tifs;
 #else /* !CONFIG_BT_CTLR_TIFS_HW */
 	SW_SWITCH_TIMER->CC[SW_SWITCH_TIMER_EVTS_COMP(sw_tifs_toggle)] = tifs;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_CC(SW_SWITCH_TIMER_NBR, sw_tifs_toggle);
+#endif
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 }
 
@@ -636,28 +713,50 @@ u32_t radio_tmr_start(u8_t trx, u32_t ticks_start, u32_t remainder)
 
 	EVENT_TIMER->CC[0] = remainder;
 
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_CLEAR(EVENT_TIMER_NBR);
+#endif
+
 	NRF_RTC0->CC[2] = ticks_start;
 	NRF_RTC0->EVTENSET = RTC_EVTENSET_COMPARE2_Msk;
 
 	HAL_EVENT_TIMER_START_PPI_REGISTER_EVT = HAL_EVENT_TIMER_START_EVT;
 	HAL_EVENT_TIMER_START_PPI_REGISTER_TASK = HAL_EVENT_TIMER_START_TASK;
 	NRF_PPI->CHENSET = HAL_EVENT_TIMER_START_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 
 	hal_radio_enable_on_tick_ppi_config_and_enable(trx);
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 
 #if !defined(CONFIG_BT_CTLR_TIFS_HW)
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+	last_pdu_end_us = 0;
+
+#else /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 	SW_SWITCH_TIMER->TASKS_CLEAR = 1;
 	SW_SWITCH_TIMER->MODE = 0;
 	SW_SWITCH_TIMER->PRESCALER = 4;
 	SW_SWITCH_TIMER->BITMODE = 0; /* 16 bit */
 	SW_SWITCH_TIMER->TASKS_START = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_CLEAR(SW_SWITCH_TIMER_NBR);
+	NRF_TIMER_regw_sideeffects_TASKS_START(SW_SWITCH_TIMER_NBR);
+#endif
+#endif /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 
 	HAL_SW_SWITCH_TIMER_CLEAR_PPI_REGISTER_EVT =
 		HAL_SW_SWITCH_TIMER_CLEAR_PPI_EVT;
 	HAL_SW_SWITCH_TIMER_CLEAR_PPI_REGISTER_TASK =
 		HAL_SW_SWITCH_TIMER_CLEAR_PPI_TASK;
 
-#if !defined(CONFIG_SOC_NRF52840)
+#if !defined(CONFIG_BT_CTLR_PHY_CODED) || !defined(CONFIG_SOC_NRF52840)
+	/* NOTE: PPI channel group disable is setup explicitly in sw_switch
+	 *       function when Coded PHY on nRF52840 is supported.
+	 */
 	HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI_REGISTER_EVT(
 		HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI(0)) =
 		HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI_EVT(
@@ -673,7 +772,8 @@ u32_t radio_tmr_start(u8_t trx, u32_t ticks_start, u32_t remainder)
 	HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI_REGISTER_TASK(
 		HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI(1)) =
 		HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI_TASK(1);
-#endif /* !defined(CONFIG_SOC_NRF52840) */
+#endif /* !CONFIG_BT_CTLR_PHY_CODED || !CONFIG_SOC_NRF52840 */
+
 	NRF_PPI->CHG[SW_SWITCH_TIMER_TASK_GROUP(0)] =
 		HAL_SW_SWITCH_GROUP_TASK_DISABLE_PPI_0_INCLUDE |
 			HAL_SW_SWITCH_RADIO_ENABLE_PPI_0_INCLUDE;
@@ -682,6 +782,10 @@ u32_t radio_tmr_start(u8_t trx, u32_t ticks_start, u32_t remainder)
 			HAL_SW_SWITCH_RADIO_ENABLE_PPI_1_INCLUDE;
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_RTC0_regw_sideeffects();
+	NRF_PPI_regw_sideeffects();
+#endif
 	return remainder;
 }
 
@@ -690,6 +794,9 @@ void radio_tmr_start_us(u8_t trx, u32_t us)
 	EVENT_TIMER->CC[0] = us;
 
 	hal_radio_enable_on_tick_ppi_config_and_enable(trx);
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 }
 
 u32_t radio_tmr_start_now(u8_t trx)
@@ -697,9 +804,15 @@ u32_t radio_tmr_start_now(u8_t trx)
 	u32_t now, start;
 
 	hal_radio_enable_on_tick_ppi_config_and_enable(trx);
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 
 	/* Capture the current time */
 	EVENT_TIMER->TASKS_CAPTURE[1] = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_CAPTURE(EVENT_TIMER_NBR, 1);
+#endif
 	now = EVENT_TIMER->CC[1];
 	start = now;
 
@@ -713,6 +826,10 @@ u32_t radio_tmr_start_now(u8_t trx)
 
 		/* Capture the current time */
 		EVENT_TIMER->TASKS_CAPTURE[1] = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_CC(EVENT_TIMER_NBR, 0);
+	NRF_TIMER_regw_sideeffects_TASKS_CAPTURE(EVENT_TIMER_NBR, 1);
+#endif
 		now = EVENT_TIMER->CC[1];
 	} while (now > start);
 
@@ -723,16 +840,27 @@ void radio_tmr_stop(void)
 {
 	EVENT_TIMER->TASKS_STOP = 1;
 	EVENT_TIMER->TASKS_SHUTDOWN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_STOP(EVENT_TIMER_NBR);
+	/* Shutdown not modelled (deprecated) */
+#endif
 
 #if !defined(CONFIG_BT_CTLR_TIFS_HW)
 	SW_SWITCH_TIMER->TASKS_STOP = 1;
 	SW_SWITCH_TIMER->TASKS_SHUTDOWN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_STOP(SW_SWITCH_TIMER_NBR);
+	/* Shutdown not modelled (deprecated) */
+#endif
 #endif /* !CONFIG_BT_CTLR_TIFS_HW */
 }
 
 void radio_tmr_hcto_configure(u32_t hcto)
 {
 	EVENT_TIMER->CC[1] = hcto;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_CC(EVENT_TIMER_NBR, 1);
+#endif
 
 	HAL_RADIO_RECV_TIMEOUT_CANCEL_PPI_REGISTER_EVT =
 		HAL_RADIO_RECV_TIMEOUT_CANCEL_PPI_EVT;
@@ -745,6 +873,9 @@ void radio_tmr_hcto_configure(u32_t hcto)
 	NRF_PPI->CHENSET =
 		HAL_RADIO_RECV_TIMEOUT_CANCEL_PPI_ENABLE |
 		HAL_RADIO_DISABLE_ON_HCTO_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 }
 
 void radio_tmr_aa_capture(void)
@@ -760,6 +891,9 @@ void radio_tmr_aa_capture(void)
 	NRF_PPI->CHENSET =
 		HAL_RADIO_READY_TIME_CAPTURE_PPI_ENABLE |
 		HAL_RADIO_RECV_TIMEOUT_CANCEL_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 }
 
 u32_t radio_tmr_aa_get(void)
@@ -792,21 +926,63 @@ void radio_tmr_end_capture(void)
 	HAL_RADIO_END_TIME_CAPTURE_PPI_REGISTER_TASK =
 		HAL_RADIO_END_TIME_CAPTURE_PPI_TASK;
 	NRF_PPI->CHENSET = HAL_RADIO_END_TIME_CAPTURE_PPI_ENABLE;
+
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 }
 
 u32_t radio_tmr_end_get(void)
 {
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+	return last_pdu_end_us;
+#else /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 	return EVENT_TIMER->CC[2];
+#endif /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 }
+
+u32_t radio_tmr_tifs_base_get(void)
+{
+	return radio_tmr_end_get();
+}
+
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+static u32_t tmr_sample_val;
+#endif /* CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 
 void radio_tmr_sample(void)
 {
-	EVENT_TIMER->TASKS_CAPTURE[3] = 1;
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+	u32_t cc;
+
+	cc = EVENT_TIMER->CC[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET];
+	EVENT_TIMER->TASKS_CAPTURE[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET] = 1;
+
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_CAPTURE(EVENT_TIMER_NBR,
+		HAL_EVENT_TIMER_SAMPLE_CC_OFFSET);
+#endif /* CONFIG_BOARD_NRFXX_NWTSIM */
+
+	tmr_sample_val = EVENT_TIMER->CC[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET];
+	EVENT_TIMER->CC[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET] = cc;
+
+#else /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
+	EVENT_TIMER->TASKS_CAPTURE[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET] = 1;
+
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_TASKS_CAPTURE(EVENT_TIMER_NBR,
+		HAL_EVENT_TIMER_SAMPLE_CC_OFFSET);
+#endif /* CONFIG_BOARD_NRFXX_NWTSIM */
+#endif /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 }
 
 u32_t radio_tmr_sample_get(void)
 {
-	return EVENT_TIMER->CC[3];
+#if defined(CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER)
+	return tmr_sample_val;
+#else /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
+	return EVENT_TIMER->CC[HAL_EVENT_TIMER_SAMPLE_CC_OFFSET];
+#endif /* !CONFIG_BT_CTLR_SW_SWITCH_SINGLE_TIMER */
 }
 
 #if defined(CONFIG_BT_CTLR_GPIO_PA_PIN) || \
@@ -872,6 +1048,9 @@ void radio_gpio_lna_off(void)
 void radio_gpio_pa_lna_enable(u32_t trx_us)
 {
 	EVENT_TIMER->CC[2] = trx_us;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_TIMER_regw_sideeffects_CC(EVENT_TIMER_NBR, 2);
+#endif
 
 	HAL_ENABLE_PALNA_PPI_REGISTER_EVT = HAL_ENABLE_PALNA_PPI_EVT;
 	HAL_ENABLE_PALNA_PPI_REGISTER_TASK = HAL_ENABLE_PALNA_PPI_TASK;
@@ -881,6 +1060,9 @@ void radio_gpio_pa_lna_enable(u32_t trx_us)
 
 	NRF_PPI->CHENSET =
 		HAL_ENABLE_PALNA_PPI_ENABLE | HAL_DISABLE_PALNA_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 }
 
 void radio_gpio_pa_lna_disable(void)
@@ -888,6 +1070,9 @@ void radio_gpio_pa_lna_disable(void)
 	NRF_PPI->CHENCLR =
 		HAL_ENABLE_PALNA_PPI_DISABLE |
 		HAL_DISABLE_PALNA_PPI_DISABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects_CHEN();
+#endif
 }
 #endif /* CONFIG_BT_CTLR_GPIO_PA_PIN || CONFIG_BT_CTLR_GPIO_LNA_PIN */
 
@@ -895,12 +1080,14 @@ static u8_t MALIGN(4) _ccm_scratch[(RADIO_PDU_LEN_MAX - 4) + 16];
 
 void *radio_ccm_rx_pkt_set(struct ccm *ccm, u8_t phy, void *pkt)
 {
+
 	u32_t mode;
 
 	NRF_CCM->ENABLE = CCM_ENABLE_ENABLE_Disabled;
 	NRF_CCM->ENABLE = CCM_ENABLE_ENABLE_Enabled;
 	mode = (CCM_MODE_MODE_Decryption << CCM_MODE_MODE_Pos) &
 	       CCM_MODE_MODE_Msk;
+
 #if defined(CONFIG_SOC_SERIES_NRF52X)
 	/* Enable CCM support for 8-bit length field PDUs. */
 	mode |= (CCM_MODE_LENGTH_Extended << CCM_MODE_LENGTH_Pos) &
@@ -921,6 +1108,7 @@ void *radio_ccm_rx_pkt_set(struct ccm *ccm, u8_t phy, void *pkt)
 			CCM_MODE_DATARATE_Msk;
 		break;
 
+#if defined(CONFIG_BT_CTLR_PHY_CODED)
 #if defined(CONFIG_SOC_NRF52840)
 	case BIT(2):
 		mode |= (CCM_MODE_DATARATE_125Kbps <<
@@ -937,10 +1125,15 @@ void *radio_ccm_rx_pkt_set(struct ccm *ccm, u8_t phy, void *pkt)
 		HAL_TRIGGER_RATEOVERRIDE_PPI_REGISTER_TASK =
 			HAL_TRIGGER_RATEOVERRIDE_PPI_TASK;
 		NRF_PPI->CHENSET = HAL_TRIGGER_RATEOVERRIDE_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+		NRF_PPI_regw_sideeffects();
+#endif /* CONFIG_BOARD_NRFXX_NWTSIM */
 		break;
 #endif /* CONFIG_SOC_NRF52840 */
+#endif /* CONFIG_BT_CTLR_PHY_CODED */
 	}
-#endif
+#endif /* CONFIG_SOC_SERIES_NRF52X */
+
 	NRF_CCM->MODE = mode;
 	NRF_CCM->CNFPTR = (u32_t)ccm;
 	NRF_CCM->INPTR = (u32_t)_pkt_scratch;
@@ -953,8 +1146,14 @@ void *radio_ccm_rx_pkt_set(struct ccm *ccm, u8_t phy, void *pkt)
 	HAL_TRIGGER_CRYPT_PPI_REGISTER_EVT = HAL_TRIGGER_CRYPT_PPI_EVT;
 	HAL_TRIGGER_CRYPT_PPI_REGISTER_TASK = HAL_TRIGGER_CRYPT_PPI_TASK;
 	NRF_PPI->CHENSET = HAL_TRIGGER_CRYPT_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 
 	NRF_CCM->TASKS_KSGEN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_CCM_regw_sideeffects_TASKS_KSGEN();
+#endif
 
 	return _pkt_scratch;
 }
@@ -988,6 +1187,9 @@ void *radio_ccm_tx_pkt_set(struct ccm *ccm, void *pkt)
 	NRF_CCM->EVENTS_ERROR = 0;
 
 	NRF_CCM->TASKS_KSGEN = 1;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_CCM_regw_sideeffects_TASKS_KSGEN();
+#endif
 
 	return _pkt_scratch;
 }
@@ -995,12 +1197,18 @@ void *radio_ccm_tx_pkt_set(struct ccm *ccm, void *pkt)
 u32_t radio_ccm_is_done(void)
 {
 	NRF_CCM->INTENSET = CCM_INTENSET_ENDCRYPT_Msk;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_CCM_regw_sideeffects_INTENSET();
+#endif
 	while (NRF_CCM->EVENTS_ENDCRYPT == 0) {
 		__WFE();
 		__SEV();
 		__WFE();
 	}
 	NRF_CCM->INTENCLR = CCM_INTENCLR_ENDCRYPT_Msk;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_CCM_regw_sideeffects_INTENCLR();
+#endif
 	NVIC_ClearPendingIRQ(CCM_AAR_IRQn);
 
 	return (NRF_CCM->EVENTS_ERROR == 0);
@@ -1032,6 +1240,9 @@ void radio_ar_configure(u32_t nirk, void *irk)
 	HAL_TRIGGER_AAR_PPI_REGISTER_EVT = HAL_TRIGGER_AAR_PPI_EVT;
 	HAL_TRIGGER_AAR_PPI_REGISTER_TASK = HAL_TRIGGER_AAR_PPI_TASK;
 	NRF_PPI->CHENSET = HAL_TRIGGER_AAR_PPI_ENABLE;
+#if defined(CONFIG_BOARD_NRFXX_NWTSIM)
+	NRF_PPI_regw_sideeffects();
+#endif
 }
 
 u32_t radio_ar_match_get(void)

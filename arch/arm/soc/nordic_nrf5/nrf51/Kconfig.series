@@ -7,7 +7,6 @@
 
 config  SOC_SERIES_NRF51X
 	bool "Nordic Semiconductor nRF51 series MCU"
-	select CPU_CORTEX_M
 	select CPU_CORTEX_M0
 	select SOC_FAMILY_NRF5
 	select NRF_RTC_TIMER
@@ -16,7 +15,6 @@ config  SOC_SERIES_NRF51X
 	select SYS_POWER_LOW_POWER_STATE_SUPPORTED
 	select XIP
 	select HAS_CMSIS
-	select HAS_NORDIC_MDK
-	select HAS_NORDIC_HAL
+	select HAS_NRFX
 	help
 	  Enable support for NRF51 MCU series
